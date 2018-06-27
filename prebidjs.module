@@ -4,10 +4,15 @@
  * @file
  */
 
+define('PREBID_JS_MIN_VERSION', '1.0');
+
 /**
  * Implements hook_libraries_info().
  */
 function prebidjs_libraries_info() {
+  $url_text = t('Prebid @version Publisher API Changes', array('@version' => PREBID_JS_MIN_VERSION));
+  $url_api_path = 'http://prebid.org/dev-docs/prebid-' . PREBID_JS_MIN_VERSION . '-API.html';
+
   $libraries['prebidjs'] = array(
     'name' => 'Prebid.js',
     'vendor url' => 'http://prebid.org',
@@ -17,19 +22,46 @@ function prebidjs_libraries_info() {
       'pattern' => '/v(\d.+)/',
       'lines' => 1,
     ),
+    'error message' => t('Prebid JS library must be installed and at minimum version @version. To download see the !download  . For API documentation see !url', array(
+      '@version' => PREBID_JS_MIN_VERSION,
+      '!download' => l(t('download page'), 'http://prebid.org/download.html'),
+      '!url' => l($url_text, $url_api_path),
+      )
+    ),
     'files' => array(
-      'js' => array('prebid.js'),
+      'js' => array(
+        'prebid.js' => array(
+          'type' => 'file',
+          'group' => JS_LIBRARY,
+          'every_page' => TRUE,
+          'weight' => -9,
+          'force header' => TRUE,
+        ),
+      ),
     ),
   );
   return $libraries;
 }
 
+/**
+ * Gets the version of the prebid library being used.
+ *
+ * @return int $version
+ */
+function prebidjs_get_version() {
+  $version = NULL;
+  $library = libraries_load('prebidjs');
+  if ($library && $library['loaded']) {
+    $version = $library['version'];
+  }
+
+  return $version;
+}
 
 /**
  * Implements hook_prebidjs_bidder_adapters_info().
  */
-function prebidjs_prebidjs_bidder_adapters_info(){
-  $bidder_adapters = array();
+function prebidjs_prebidjs_bidder_adapters_info() {
   $bidder_adapters = array(
     'oftmedia' => array(
       'name' => 'oftmedia',
@@ -642,6 +674,14 @@ function prebidjs_prebidjs_bidder_adapters_info(){
 /**
  * Custom function to get the bidder adapters
  */
-function prebidjs_get_bidder_adapters(){
-  return module_invoke_all('prebidjs_bidder_adapters_info');
+function prebidjs_get_bidder_adapters() {
+
+  // We provide a default list of bidders in this module via this hook.
+  $bidder_adapters = module_invoke_all('prebidjs_bidder_adapters_info');
+
+  // Provide an alter hook so that other modules can easily manipulate or
+  // completely overwrite the bidder adapters. This provides backwards
+  // compatibility with the info hook.
+  drupal_alter('prebidjs_bidder_adapters', $bidder_adapters);
+  return $bidder_adapters;
 }

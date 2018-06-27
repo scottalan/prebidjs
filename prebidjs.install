@@ -16,12 +16,16 @@ function prebidjs_requirements($phase) {
     drupal_load('module', 'libraries');
     $libraries = prebidjs_libraries_info();
     foreach ($libraries as $name => $info) {
-      $library = libraries_detect($name);
-      $requirements[$name] = array(
-        'title' => $library['name'],
-        'severity' => $library['installed'] ? REQUIREMENT_OK : REQUIREMENT_ERROR,
-        'value' => $library['installed'] ? l($library['version'], $library['download url']) : $library['error message'],
-      );
+      if ( $name === 'prebidjs') {
+        $library = libraries_detect($name);
+        $version = (float) $library['version'];
+        $error = $version < 1.0 ? TRUE : FALSE;
+        $requirements[$name] = array(
+          'title' => $library['name'],
+          'severity' => !$error ? REQUIREMENT_OK : REQUIREMENT_ERROR,
+          'value' => ($library['installed'] && !$error) ? l($library['version'], $library['download url']) : $library['error message'],
+        );
+      }
     }
   }
   return $requirements;

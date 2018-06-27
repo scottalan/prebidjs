@@ -5,11 +5,9 @@
  */
 
 /**
- * Implements hook_form_alter()
+ * Implements hook_form_alter().
  */
-function prebidjs_dfp_form_alter(&$form, &$form_state, $form_id){
-  // dsm($form);
-  // dsm($form_id);
+function prebidjs_dfp_form_alter(&$form, &$form_state, $form_id) {
   if($form_id == 'dfp_admin_settings'){
     $form['prebidjs_dfp_settings'] = array(
       '#type' => 'fieldset',
@@ -33,9 +31,25 @@ function prebidjs_dfp_form_alter(&$form, &$form_state, $form_id){
         'fixed' => 'Fixed'
       )
     );
-    $form['prebidjs_dfp_settings']['prebidjs_price_granularity'] = array(
-      '#type' => 'radios',
+    $form['prebidjs_dfp_settings']['prebidjs_pricing'] = array(
+      '#type' => 'fieldset',
       '#title' => t('Price Granularity'),
+      '#collapsible' => FALSE,
+      '#collapsed' => FALSE,
+    );
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_granularity_select'] = array(
+      '#type' => 'radios',
+      '#title' => t('Type'),
+      '#description' => t('Select the type of price granularity you would like to use.'),
+      '#default_value' => variable_get('prebidjs_granularity_select', 'standard'),
+      '#options' => array(
+        'standard' => t('Standard'),
+        'custom' => t('Custom'),
+      ),
+    );
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_price_granularity'] = array(
+      '#type' => 'radios',
+      '#title' => t('Standard Granularity'),
       '#default_value' => variable_get('prebidjs_price_granularity', 'medium'),
       '#options' => array(
         'auto' => 'Auto',
@@ -43,7 +57,44 @@ function prebidjs_dfp_form_alter(&$form, &$form_state, $form_id){
         'medium' => 'Medium',
         'high' => 'High',
         'dense' => 'Dense'
-      )
+      ),
+      '#states' => array(
+        'visible' => array(
+          'input[name="prebidjs_granularity_select"]' => array('value' => 'standard'),
+        ),
+      ),
+    );
+    // @todo: Allow multiple sets of custom pricing for multiple "buckets".
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_custom_price_fieldset'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Custom'),
+      '#collapsible' => FALSE,
+      '#collapsed' => FALSE,
+      '#states' => array(
+        'visible' => array(
+          'input[name="prebidjs_granularity_select"]' => array('value' => 'custom'),
+        ),
+      ),
+    );
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_custom_price_fieldset']['prebidjs_custom_price_precision'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Precision'),
+      '#default_value' => variable_get('prebidjs_custom_price_precision', 2),
+    );
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_custom_price_fieldset']['prebidjs_custom_price_min'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Minimum'),
+      '#default_value' => variable_get('prebidjs_custom_price_min', 0),
+    );
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_custom_price_fieldset']['prebidjs_custom_price_max'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Maximum'),
+      '#default_value' => variable_get('prebidjs_custom_price_max', 1000),
+    );
+    $form['prebidjs_dfp_settings']['prebidjs_pricing']['prebidjs_custom_price_fieldset']['prebidjs_custom_price_increment'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Increment'),
+      '#default_value' => variable_get('prebidjs_custom_price_increment', 0.01),
     );
     $form['prebidjs_dfp_settings']['prebidjs_send_all_bids'] = array(
       '#type' => 'checkbox',
@@ -66,7 +117,8 @@ function prebidjs_dfp_form_ctools_export_ui_edit_item_form_alter(&$form, &$form_
   // Allow other modules to dictate which group the fieldset lives in.
   $group = 'settings';
   drupal_alter('prebidjs_dfp_form_group', $group);
-  $settings = prebidjs_dfp_settings_load($form_state['plugin']['schema'], $form_state['item']->{$form_state['plugin']['export']['key']});
+  $dfp_tag_name = $form_state['item']->{$form_state['plugin']['export']['key']};
+  $settings = prebidjs_dfp_settings_load($form_state['plugin']['schema'], $dfp_tag_name);
   $form['prebidjs_dfp_settings'] = array(
     '#type' => 'fieldset',
     '#title' => t('Prebid.js options'),
@@ -82,57 +134,80 @@ function prebidjs_dfp_form_ctools_export_ui_edit_item_form_alter(&$form, &$form_
       ),
     );
   }
-  
+
   $form['prebidjs_dfp_settings']['bidder_adapters'] = array(
     '#type' => 'container'
   );
-  
+
   // Get all the bidding plugins
   $bidder_adapters = prebidjs_get_bidder_adapters();
-  foreach($bidder_adapters as $name => $adapter){
-    // dsm($adapter, $name);
-    $form['prebidjs_dfp_settings']['bidder_adapters'][$name] = array(
-      '#type' => 'container'
+  if (empty($bidder_adapters)) {
+    $form['prebidjs_dfp_settings']['bidder_adapters']['no_adapters'] = array(
+      '#prefix' => '<div class="prebidjs no-adapter">',
+      '#suffix' => '</div>',
+      '#markup' => 'You must supply a hook in a custom module returning all bidders and their parameters for which you need.'
     );
-    $form['prebidjs_dfp_settings']['bidder_adapters'][$name][$name] = array(
-      '#type' => 'checkbox',
-      '#title' => $adapter['name'],
-      '#default_value' => $settings[$name]['active'],
+  }
+  else {
+    foreach($bidder_adapters as $bidder => $adapter) {
+      // Allow form customization for adapters that have stupid requirements...
+      // "cough"...ix.
+      if ($adapter['callback'] && function_exists($adapter['callback'])) {
+        // Pass the same arguments that are used to build the bidder form in
+        // prebidjs_dfp_ctools_export_bidder_form(). Add an additional argument
+        // for the DFP tag name, the callback might need information stored
+        // in the tag as well.
+        $adapter['callback']($form, $bidder, $adapter, $settings, $dfp_tag_name);
+      }
+      else {
+        prebidjs_dfp_ctools_export_bidder_form($form, $bidder, $adapter, $settings);
+      }
+    }
+
+    // Add a submit and validation handlers to the exportable item form.
+    $form['#validate'][] = 'prebidjs_dfp_form_validate';
+    $form['#submit'][] = 'prebidjs_dfp_form_submit';
+  }
+}
+
+function prebidjs_dfp_ctools_export_bidder_form(&$form, $bidder, $adapter, $settings) {
+  $form['prebidjs_dfp_settings']['bidder_adapters'][$bidder] = array(
+    '#type' => 'container'
+  );
+  $form['prebidjs_dfp_settings']['bidder_adapters'][$bidder][$bidder] = array(
+    '#type' => 'checkbox',
+    '#title' => $bidder,
+    '#default_value' => $settings[$bidder]['active'],
+    '#parents' => array(
+      'bidder_adapters',
+      $bidder,
+      'active'
+    ),
+  );
+  $form['prebidjs_dfp_settings']['bidder_adapters'][$bidder]['settings'] = array(
+    '#type' => 'container'
+  );
+  foreach($adapter['settings'] as $label => $setting){
+    $form['prebidjs_dfp_settings']['bidder_adapters'][$bidder]['settings'][$label] = array(
+      '#type' => 'textfield',
+      '#title' => $label,
+      '#default_value' => $settings[$bidder]['settings'][$label],
+      '#states' => array(
+        'visible' => array(
+          ':input[name="bidder_adapters[' . $bidder . '][active]"]' => array('checked' => TRUE)
+        ),
+        'required' => array(
+          ':input[name="bidder_adapters[' . $bidder . '][active]"]' => array('checked' => TRUE)
+        ),
+      ),
       '#parents' => array(
         'bidder_adapters',
-        $name,
-        'active'
+        $bidder,
+        'settings',
+        $label
       ),
     );
-    $form['prebidjs_dfp_settings']['bidder_adapters'][$name]['settings'] = array(
-      '#type' => 'container'
-    );
-    foreach($adapter['settings'] as $label => $setting){
-      $form['prebidjs_dfp_settings']['bidder_adapters'][$name]['settings'][$label] = array(
-        '#type' => 'textfield',
-        '#title' => $label,
-        '#default_value' => $settings[$name]['settings'][$label],
-        '#states' => array(
-          'visible' => array(
-            ':input[name="bidder_adapters[' . $name . '][active]"]' => array('checked' => TRUE)
-          ),
-          'required' => array(
-            ':input[name="bidder_adapters[' . $name . '][active]"]' => array('checked' => TRUE)
-          ),
-        ),
-        '#parents' => array(
-          'bidder_adapters',
-          $name,
-          'settings',
-          $label
-        ),
-      );
-    }
   }
-
-  // Add a submit and validation handlers to the exportable item form.
-  $form['#validate'][] = 'prebidjs_dfp_form_validate';
-  $form['#submit'][] = 'prebidjs_dfp_form_submit';
 }
 
 /**
@@ -149,7 +224,7 @@ function prebidjs_dfp_form_submit($form, &$form_state) {
     ->condition('schema_name', $form_state['plugin']['schema'])
     ->condition('machinename', $form_state['item']->{$form_state['plugin']['export']['key']})
     ->execute();
- 
+
   // Now add all of the scheduled actions from the just-submitted form.
   $data = array(
     'settings' => serialize($form_state['values']['bidder_adapters']),
@@ -184,64 +259,118 @@ function prebidjs_dfp_preprocess_html($variables) {
 }
 
 /**
- * A callback function to load the global PrebigJs
+ * A callback function to load the global prebid javascript.
  */
-function _prebidjs_dfp_global_settings(){
+function _prebidjs_dfp_global_settings() {
   if (($library = libraries_load('prebidjs')) && !empty($library['loaded'])) {
-    // Initialize the lib.
-    $js = 'var adUnits = [];' . "\n";
-    $js .= 'var pbjs = pbjs || {};' . "\n";
-    $js .= 'pbjs.que = pbjs.que || [];' . "\n";
 
+    // We need to load our prebid-dfp.js file after prebid.js but before
+    // dfp_googletag.cmd.js from DFP.
+    // See _dfp_js_global_settings().
     $options = array(
-      'type' => 'inline',
-      'group' => JS_LIBRARY,
-      'every_page' => TRUE,
-      'weight' => -20, // Push this before the DFP tags @see _dfp_js_global_settings()
-      'force header' => TRUE,
-    );
-    drupal_add_js($js, $options);
-    
-    // Load the in injected JS
-    $js  = 'var PREBID_TIMEOUT = ' . variable_get('prebidjs_timeout', 2000) . ';' . "\n";
-    $js .= 'pbjs.que.push(function() {' . "\n";
-    $js .= 'pbjs.setConfig({' . "\n";
-    $js .= "bidderSequence: ' " . variable_get('prebidjs_bidder_sequence', 'random') . "'," . "\n";
-    $js .= 'enableSendAllBids: ' . variable_get('prebidjs_send_all_bids', TRUE) . ',' . "\n";
-    $js .= "priceGranularity: '" . variable_get('prebidjs_price_granularity', 'medium') . "'" . "\n";
-    $js .= '})' . "\n";
-    $js .= 'pbjs.addAdUnits(adUnits);' . "\n";
-    $js .= 'pbjs.requestBids({' . "\n";
-    $js .= 'bidsBackHandler: sendAdserverRequest' . "\n";
-    $js .= '});' . "\n";
-    $js .= '});' . "\n";
-    $js .= 'function sendAdserverRequest() {' . "\n";
-    $js .= 'if (pbjs.adserverRequestSent) return;' . "\n";
-    $js .= "pbjs.adserverRequestSent = true;" . "\n";
-    $js .= 'googletag.cmd.push(function() {' . "\n";
-    $js .= "pbjs.que.push(function() {" . "\n";
-    $js .= 'pbjs.setTargetingForGPTAsync();' . "\n";
-    $js .= 'googletag.pubads().refresh();' . "\n";
-    $js .= '});' . "\n";
-    $js .= '});' . "\n";
-    $js .= '}' . "\n";
-    $js .= 'setTimeout(function() {' . "\n";
-    $js .= 'sendAdserverRequest();' . "\n";
-    $js .= '}, PREBID_TIMEOUT);' . "\n";
-
-
-    $js .= variable_get('dfp_injected_js2', '') . "\n";
-    $js .= 'googletag.enableServices();';
-
-    $options = array(
-      'type' => 'inline',
+      'type' => 'file',
       'group' => JS_DEFAULT,
       'every_page' => TRUE,
-      'weight' => 20, // Push this before the DFP @see _dfp_js_global_settings()
+      'weight' => 19,
       'force header' => TRUE,
     );
-    drupal_add_js($js, $options);
-    
+
+    // Load our custom javascript.
+    drupal_add_js(drupal_get_path('module', 'prebidjs_dfp') . '/js/prebidjs-dfp.js', $options);
+
+    $settings = array(
+      'prebidjsDfp' => array(
+        'version' => $library['version'],
+        'prebidTimeout' => variable_get('prebidjs_timeout', 2000),
+        'prebidBidderSequence' => variable_get('prebidjs_bidder_sequence', 'random'),
+        'prebidEnableSendAllBids' => variable_get('prebidjs_send_all_bids', TRUE),
+      ),
+    );
+
+    // This is price granularity type that is selected under the Global DFP
+    // Settings tab under Prebid.js Settings.
+    $pricing_type = variable_get('prebidjs_granularity_select', 'standard');
+    if ($pricing_type === 'standard') {
+      $settings['prebidjsDfp']['prebidPriceGranularity'] = array(
+        'standard' => array(
+          'value' => variable_get('prebidjs_price_granularity', 'medium'),
+        ),
+      );
+    }
+    else {
+      // @todo: Allow multiple buckets.
+      $settings['prebidjsDfp']['prebidPriceGranularity'] = array(
+        'custom' => array(
+          'precision' => variable_get('prebidjs_custom_price_precision', 2),
+          'min' => variable_get('prebidjs_custom_price_min', 0),
+          'max' => variable_get('prebidjs_custom_price_max', 1000),
+          'increment' => variable_get('prebidjs_custom_price_increment', 0.01),
+        ),
+      );
+
+    }
+
+    // Add a placeholder for settings we generate in
+    // prebidjs_dfp_dfp_tag_alter().
+    $settings['prebidjsBidders'] = array();
+
+    // Add Drupal.settings.
+    drupal_add_js($settings, 'setting');
+
+//    // Initialize the lib.
+//    $js = 'var adUnits = [];' . "\n";
+//    $js .= 'var pbjs = pbjs || {};' . "\n";
+//    $js .= 'pbjs.que = pbjs.que || [];' . "\n";
+//
+//    $options = array(
+//      'type' => 'inline',
+//      'group' => JS_LIBRARY,
+//      'every_page' => TRUE,
+//      'weight' => -20, // Push this before the DFP tags @see _dfp_js_global_settings()
+//      'force header' => TRUE,
+//    );
+//    drupal_add_js($js, $options);
+//
+//    // Load the in injected JS
+//    $js  = 'var PREBID_TIMEOUT = ' . variable_get('prebidjs_timeout', 2000) . ';' . "\n";
+//    $js .= 'pbjs.que.push(function() {' . "\n";
+//    $js .= 'pbjs.setConfig({' . "\n";
+//    $js .= "bidderSequence: ' " . variable_get('prebidjs_bidder_sequence', 'random') . "'," . "\n";
+//    $js .= 'enableSendAllBids: ' . variable_get('prebidjs_send_all_bids', TRUE) . ',' . "\n";
+//    $js .= "priceGranularity: '" . variable_get('prebidjs_price_granularity', 'medium') . "'" . "\n";
+//    $js .= '})' . "\n";
+//    $js .= 'pbjs.addAdUnits(adUnits);' . "\n";
+//    $js .= 'pbjs.requestBids({' . "\n";
+//    $js .= 'bidsBackHandler: sendAdserverRequest' . "\n";
+//    $js .= '});' . "\n";
+//    $js .= '});' . "\n";
+//    $js .= 'function sendAdserverRequest() {' . "\n";
+//    $js .= 'if (pbjs.adserverRequestSent) return;' . "\n";
+//    $js .= "pbjs.adserverRequestSent = true;" . "\n";
+//    $js .= 'googletag.cmd.push(function() {' . "\n";
+//    $js .= "pbjs.que.push(function() {" . "\n";
+//    $js .= 'pbjs.setTargetingForGPTAsync();' . "\n";
+//    $js .= 'googletag.pubads().refresh();' . "\n";
+//    $js .= '});' . "\n";
+//    $js .= '});' . "\n";
+//    $js .= '}' . "\n";
+//    $js .= 'setTimeout(function() {' . "\n";
+//    $js .= 'sendAdserverRequest();' . "\n";
+//    $js .= '}, PREBID_TIMEOUT);' . "\n";
+//
+//
+//    $js .= variable_get('dfp_injected_js2', '') . "\n";
+//    $js .= 'googletag.enableServices();';
+//
+//    $options = array(
+//      'type' => 'inline',
+//      'group' => JS_DEFAULT,
+//      'every_page' => TRUE,
+//      'weight' => 20, // Push this before the DFP @see _dfp_js_global_settings()
+//      'force header' => TRUE,
+//    );
+//    drupal_add_js($js, $options);
+
   }
 }
 
@@ -249,38 +378,38 @@ function _prebidjs_dfp_global_settings(){
  * hook_dfp_tag_alter
  */
 function prebidjs_dfp_dfp_tag_alter(&$tag) {
-  $settings = prebidjs_dfp_settings_load($tag->table, $tag->machinename);
-  if(!empty($settings)){
-    $prebidjs_dfp = array();
+  $bidders = prebidjs_dfp_settings_load($tag->table, $tag->machinename);
+  if(!empty($bidders)){
     if (($library = libraries_load('prebidjs')) && !empty($library['loaded'])) {
-      $bids = array();
-      foreach($settings as $bidder => $bid){
-        if(!$bid['active']) continue;
-        $bids[] = array(
-          'bidder' => $bidder,
-          'params' => $bid['settings']
-        );
+      foreach($bidders as $bidder => $bid){
+        if (!$bid['active']) {
+          continue;
+        }
+
+        $settings['prebidjsBidders'][$tag->machinename][$bidder] = $bid;
       }
-      $sizes = explode(',', $tag->size);
-      $ad_sizes = array();
-      foreach($sizes as $size){
-        list($width, $height) = explode('x', $size);
-        $ad_sizes[] = array((int)$width, (int)$height);
-      }
-      $prebidjs_dfp[] = array(
-        'code' => $tag->placeholder_id,
-        'sizes' => $ad_sizes,
-        'bids' => $bids
-      );
-      $js = 'adUnits = adUnits.concat(' . json_encode($prebidjs_dfp) . ');' . "\n";
-      $options = array(
-        'type' => 'inline',
-        'group' => JS_DEFAULT,
-        'every_page' => TRUE,
-        'weight' => 0,
-        'force header' => TRUE,
-      );
-      drupal_add_js($js, $options);
+
+      drupal_add_js($settings, 'setting');
+//      $sizes = explode(',', $tag->size);
+//      $ad_sizes = array();
+//      foreach($sizes as $size){
+//        list($width, $height) = explode('x', $size);
+//        $ad_sizes[] = array((int)$width, (int)$height);
+//      }
+//      $prebidjs_dfp[] = array(
+//        'code' => $tag->placeholder_id,
+//        'sizes' => $ad_sizes,
+//        'bids' => $bids
+//      );
+//      $js = 'adUnits = adUnits.concat(' . json_encode($prebidjs_dfp) . ');' . "\n";
+//      $options = array(
+//        'type' => 'inline',
+//        'group' => JS_DEFAULT,
+//        'every_page' => TRUE,
+//        'weight' => 0,
+//        'force header' => TRUE,
+//      );
+//      drupal_add_js($js, $options);
     }
   }
 }
